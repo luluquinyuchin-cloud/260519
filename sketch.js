@@ -11,7 +11,6 @@ let aiChoice      = 'none';
 let roundResult   = '';
 let score         = { win: 0, lose: 0, draw: 0 };
 let cameraStarted = false;
-let isProcessing   = false;
 
 let countdownTimer = 0;
 let resultTimer    = 0;
@@ -29,7 +28,6 @@ const DETECT_WINDOW = 1500;
 let W, H, camW, camH, camX, camY;
 // HUD 彈出卡片
 let panelW, panelH, panelX, panelY;
-let camGraphics; // Offscreen buffer for camera feed
 // 入場動畫
 let panelScale = 0.88;
 
@@ -38,29 +36,25 @@ function setup() {
   W = windowWidth; H = windowHeight;
   createCanvas(W, H);
   textFont('monospace');
-  frameRate(30);
+  frameRate(60);
   recalcLayout();
 
   video = createCapture(VIDEO, videoReady);
-  video.size(640, 480);
+  video.size(camW, camH);
   video.hide();
 
   hands = new Hands({
     locateFile: (file) => {
-      return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+      return `libraries/mediapipe/${file}`;
     }
   });
   hands.setOptions({
     maxNumHands: 1,
     modelComplexity: 0,
-    minDetectionConfidence: 0.45,
-    minTrackingConfidence: 0.45
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.5
   });
   hands.onResults(r => { landmarks = r.multiHandLandmarks?.[0] || []; });
-
-  // Initialize camGraphics after camW, camH are set by recalcLayout
-  // This ensures camGraphics has the correct initial dimensions.
-  camGraphics = createGraphics(camW, camH);
 }
 
 function recalcLayout() {
@@ -71,34 +65,19 @@ function recalcLayout() {
   panelH = 172;
   panelX = camX;
   panelY = camY - panelH - 12;
-
-  // Recreate camGraphics if dimensions change (e.g., on window resize)
-  if (camGraphics && (camGraphics.width !== camW || camGraphics.height !== camH)) {
-    camGraphics = createGraphics(camW, camH);
-  }
 }
 
 function videoReady() {
   camera = new Camera(video.elt, {
     onFrame: async () => {
-      if (isProcessing) return;
-      isProcessing = true;
-      try {
-        await hands.send({ image: video.elt });
-      } finally {
-        isProcessing = false;
-      }
+      await hands.send({ image: video.elt });
     },
-    width: 640,
-    height: 480
+    width: camW,
+    height: camH
   });
-  camera.start().then(() => {
-    cameraStarted = true;
-    console.log("攝影機已成功啟動。"); // 新增成功啟動的日誌
-  }).catch(err => {
-    console.error("攝影機啟動失敗:", err);
-    // 您可以在這裡新增邏輯，例如更新 gameState 顯示錯誤訊息在畫布上
-  });
+  camera.start()
+    .then(() => { cameraStarted = true; })
+    .catch(err => { console.error("攝影機啟動失敗:", err); });
 }
 
 // ── 手勢辨識 ─────────────────────────────────────────────────
@@ -153,29 +132,22 @@ function drawCameraFrame() {
   push();
   translate(camX + camW, camY);
   scale(-1, 1);
-
-  // Draw video or loading state to offscreen buffer (camGraphics)
-  camGraphics.clear(); // Clear the buffer for the new frame
-  camGraphics.drawingContext.save(); // Save the drawing context of the buffer
-  camGraphics.drawingContext.beginPath();
-  camGraphics.drawingContext.roundRect(0, 0, camW, camH, 12); // Define rounded rectangle path
-  camGraphics.drawingContext.clip(); // Apply clipping to the buffer
   if (cameraStarted && video.elt.readyState >= 2) {
-    camGraphics.image(video, 0, 0, camW, camH); // Draw video to the buffer
+    drawingContext.save();
+    drawingContext.beginPath();
+    drawingContext.roundRect(0, 0, camW, camH, 12);
+    drawingContext.clip();
+    image(video, 0, 0, camW, camH);
+    drawingContext.restore();
   } else {
-    // Draw loading state to the buffer
-    camGraphics.fill(30, 30, 40);
-    camGraphics.rect(0, 0, camW, camH, 12);
-    camGraphics.fill(255, 150);
-    camGraphics.textAlign(CENTER, CENTER);
-    camGraphics.textSize(16);
-    camGraphics.text("正在尋找攝影機並載入模型...", camW/2, camH/2);
+    // 載入中的視覺提示
+    fill(30, 30, 40);
+    rect(0, 0, camW, camH, 12);
+    fill(255, 150);
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    text("正在尋找攝影機並載入模型...", camW/2, camH/2);
   }
-  camGraphics.drawingContext.restore(); // Restore the drawing context of the buffer
-
-  // Draw the pre-rendered camGraphics buffer (with video/loading state and rounded corners)
-  // to the main canvas, applying the horizontal flip.
-  image(camGraphics, 0, 0, camW, camH);
   pop();
 
   // 亮邊框
