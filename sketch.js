@@ -10,6 +10,7 @@ let playerGesture = 'none';
 let aiChoice      = 'none';
 let roundResult   = '';
 let score         = { win: 0, lose: 0, draw: 0 };
+let cameraStarted = false;
 
 let countdownTimer = 0;
 let resultTimer    = 0;
@@ -39,11 +40,13 @@ function setup() {
   recalcLayout();
 
   video = createCapture(VIDEO, videoReady);
-  video.size(640, 480);
+  video.size(camW, camH);
   video.hide();
 
   hands = new Hands({
-    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }
   });
   hands.setOptions({
     maxNumHands: 1,
@@ -66,10 +69,15 @@ function recalcLayout() {
 
 function videoReady() {
   camera = new Camera(video.elt, {
-    onFrame: async () => { await hands.send({ image: video.elt }); },
-    width: 640, height: 480
+    onFrame: async () => {
+      await hands.send({ image: video.elt });
+    },
+    width: camW,
+    height: camH
   });
-  camera.start();
+  camera.start()
+    .then(() => { cameraStarted = true; })
+    .catch(err => { console.error("攝影機啟動失敗:", err); });
 }
 
 // ── 手勢辨識 ─────────────────────────────────────────────────
@@ -98,6 +106,7 @@ function draw() {
   drawCameraFrame();
   drawHandOverlay();
   drawHUDPanel();
+  drawSideStatus();
   drawScoreCard();
 }
 
@@ -123,13 +132,21 @@ function drawCameraFrame() {
   push();
   translate(camX + camW, camY);
   scale(-1, 1);
-  if (video.elt && video.elt.readyState >= 2) {
+  if (cameraStarted && video.elt.readyState >= 2) {
     drawingContext.save();
     drawingContext.beginPath();
     drawingContext.roundRect(0, 0, camW, camH, 12);
     drawingContext.clip();
     image(video, 0, 0, camW, camH);
     drawingContext.restore();
+  } else {
+    // 載入中的視覺提示
+    fill(30, 30, 40);
+    rect(0, 0, camW, camH, 12);
+    fill(255, 150);
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    text("正在尋找攝影機並載入模型...", camW/2, camH/2);
   }
   pop();
 
@@ -366,6 +383,34 @@ function drawOptionPill(cx, cy, emoji, label, active) {
   pop();
 }
 
+// ── 左右兩側狀態顯示 ──────────────────────────────────────────
+function drawSideStatus() {
+  if (gameState !== 'DETECT' && gameState !== 'RESULT') return;
+
+  push();
+  textAlign(CENTER, CENTER);
+  noStroke();
+  let lx = camX / 2;           // 左側空白中心
+  let rx = W - camX / 2;       // 右側空白中心
+  let cy = camY + camH / 2;    // 攝影機垂直中心
+
+  if (gameState === 'DETECT') {
+    fill(255, 180); textSize(20);
+    text('AI 思考中...', lx, cy);
+  } else if (gameState === 'RESULT') {
+    // 左側：AI
+    fill(255, 120); textSize(14); text('AI 出拳', lx, cy - 70);
+    fill(255);      textSize(80); text(gestureEmoji(aiChoice), lx, cy);
+    fill(255, 180); textSize(20); text(gestureName(aiChoice), lx, cy + 70);
+
+    // 右側：玩家
+    fill(255, 120); textSize(14); text('你出拳', rx, cy - 70);
+    fill(255);      textSize(80); text(gestureEmoji(playerGesture), rx, cy);
+    fill(255, 180); textSize(20); text(gestureName(playerGesture), rx, cy + 70);
+  }
+  pop();
+}
+
 // ── 右下計分卡 ───────────────────────────────────────────────
 function drawScoreCard() {
   let sw = 124, sh = 82;
@@ -403,6 +448,26 @@ function keyPressed() {
 function mousePressed() {
   if (gameState === 'READY') {
     gameState = 'COUNTDOWN'; countdownTimer = millis();
+  } else if (gameState === 'MENU') {
+    let pw = 112, ph = 52;
+    // 判定「繼續」按鈕範圍 (✋)
+    let c1x = panelX + panelW * 0.28;
+    let c1y = panelY + 96;
+    if (mouseX > c1x - pw/2 && mouseX < c1x + pw/2 &&
+        mouseY > c1y - ph/2 && mouseY < c1y + ph/2) {
+      gameState = 'COUNTDOWN';
+      countdownTimer = millis();
+      menuGesture = 'none'; menuProgress = 0;
+    }
+    // 判定「結束」按鈕範圍 (✊)
+    let c2x = panelX + panelW * 0.72;
+    let c2y = panelY + 96;
+    if (mouseX > c2x - pw/2 && mouseX < c2x + pw/2 &&
+        mouseY > c2y - ph/2 && mouseY < c2y + ph/2) {
+      gameState = 'READY';
+      score = { win: 0, lose: 0, draw: 0 };
+      menuGesture = 'none'; menuProgress = 0;
+    }
   }
 }
 function windowResized() {
