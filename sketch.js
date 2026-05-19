@@ -1,436 +1,412 @@
 // ============================================================
-//  AI 手勢辨識剪刀石頭布遊戲 — sketch.js
-//  攝影機影像顯示於畫布中央（60% 寬高）
-//  繼續/結束手勢：✋ 張開手掌靜止 2 秒 = 繼續 | ✊ 握拳靜止 2 秒 = 結束
+//  AI 手勢辨識剪刀石頭布遊戲 — sketch.js  (Popup Card 設計版)
 // ============================================================
 
-// ── 全域狀態 ─────────────────────────────────────────────────
-let video;
-let hands;
-let camera;
+let video, hands, camera;
 let landmarks = [];
 
-// 遊戲狀態機
-// 'READY' → 'COUNTDOWN' → 'DETECT' → 'RESULT' → 'MENU'
-let gameState = 'READY';
-let playerGesture = 'none';   // scissors / rock / paper
-let aiChoice     = 'none';
-let roundResult  = '';        // win / lose / draw
-let score        = { win: 0, lose: 0, draw: 0 };
+let gameState     = 'READY';
+let playerGesture = 'none';
+let aiChoice      = 'none';
+let roundResult   = '';
+let score         = { win: 0, lose: 0, draw: 0 };
 
-// 倒數計時
-let countdownVal = 3;
 let countdownTimer = 0;
+let resultTimer    = 0;
+const RESULT_HOLD  = 2200;
 
-// 遊戲結果停留
-let resultTimer = 0;
-const RESULT_HOLD = 2000; // ms
-
-// 選單手勢（繼續/結束）
-let menuGesture      = 'none';   // 'open' | 'fist' | 'none'
+let menuGesture      = 'none';
 let menuGestureStart = 0;
-const MENU_HOLD_MS   = 2000;     // 需靜止 2 秒
-let menuProgress     = 0;        // 0~1 進度條
+const MENU_HOLD_MS   = 2000;
+let menuProgress     = 0;
 
-// 畫布
-let W, H;
-let camW, camH;   // 顯示影像大小 (60%)
-let camX, camY;   // 影像左上角
+let detectStart = 0;
+const DETECT_WINDOW = 1500;
 
-// ── p5 setup ─────────────────────────────────────────────────
+// 畫布 & 影像
+let W, H, camW, camH, camX, camY;
+// HUD 彈出卡片
+let panelW, panelH, panelX, panelY;
+// 入場動畫
+let panelScale = 0.88;
+
+// ── setup ────────────────────────────────────────────────────
 function setup() {
-  W = windowWidth;
-  H = windowHeight;
+  W = windowWidth; H = windowHeight;
   createCanvas(W, H);
   textFont('monospace');
+  frameRate(60);
+  recalcLayout();
 
-  camW = W * 0.60;
-  camH = H * 0.60;
-  camX = (W - camW) / 2;
-  camY = (H - camH) / 2;
-
-  // 建立隱藏 video 元素
   video = createCapture(VIDEO, videoReady);
   video.size(640, 480);
   video.hide();
 
-  // MediaPipe Hands 初始化
   hands = new Hands({
-    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
   });
   hands.setOptions({
     maxNumHands: 1,
-    modelComplexity: 0, // 改為 0 (Lite 版) 以大幅提升效能
-    minDetectionConfidence: 0.5,
+    modelComplexity: 0,
+    minDetectionConfidence: 0.55,
     minTrackingConfidence: 0.5
   });
-  hands.onResults(onHandResults);
+  hands.onResults(r => { landmarks = r.multiHandLandmarks?.[0] || []; });
+}
+
+function recalcLayout() {
+  camW = W * 0.60; camH = H * 0.60;
+  camX = (W - camW) / 2;
+  camY = (H - camH) / 2 + 20;   // 稍微往下，留空間給卡片
+  panelW = camW;
+  panelH = 172;
+  panelX = camX;
+  panelY = camY - panelH - 12;
 }
 
 function videoReady() {
   camera = new Camera(video.elt, {
     onFrame: async () => { await hands.send({ image: video.elt }); },
-    width: 640,
-    height: 480
+    width: 640, height: 480
   });
   camera.start();
-}
-
-// ── MediaPipe 回呼 ────────────────────────────────────────────
-function onHandResults(results) {
-  landmarks = results.multiHandLandmarks?.[0] || [];
 }
 
 // ── 手勢辨識 ─────────────────────────────────────────────────
 function classifyGesture(lm) {
   if (!lm || lm.length < 21) return 'none';
-
-  const fingerTips  = [8, 12, 16, 20];
-  const fingerMids  = [6, 10, 14, 18];
-  const thumbTip    = lm[4];
-  const thumbBase   = lm[2];
-
-  const extCount = fingerTips.filter((tip, i) =>
-    lm[tip].y < lm[fingerMids[i]].y
-  ).length;
-
-  const thumbOut = thumbTip.x < thumbBase.x;  // 右手
-
-  if (extCount === 0) return 'rock';
-  if (extCount >= 4)  return 'paper';
-  if (extCount === 2 && lm[8].y < lm[6].y && lm[12].y < lm[10].y) return 'scissors';
+  const tips = [8,12,16,20], mids = [6,10,14,18];
+  const ext = tips.filter((t,i) => lm[t].y < lm[mids[i]].y).length;
+  if (ext === 0) return 'rock';
+  if (ext >= 4)  return 'paper';
+  if (ext === 2 && lm[8].y < lm[6].y && lm[12].y < lm[10].y) return 'scissors';
   return 'none';
 }
-
-// 選單手勢：open=5指伸展, fist=0指伸展
 function classifyMenuGesture(lm) {
   if (!lm || lm.length < 21) return 'none';
-  const fingerTips = [8, 12, 16, 20];
-  const fingerMids = [6, 10, 14, 18];
-  const ext = fingerTips.filter((tip, i) => lm[tip].y < lm[fingerMids[i]].y).length;
+  const tips = [8,12,16,20], mids = [6,10,14,18];
+  const ext = tips.filter((t,i) => lm[t].y < lm[mids[i]].y).length;
   if (ext >= 4) return 'open';
   if (ext === 0) return 'fist';
   return 'none';
 }
 
-// ── 主繪圖迴圈 ───────────────────────────────────────────────
+// ── draw ─────────────────────────────────────────────────────
 function draw() {
-  background(10, 10, 20);
-
-  drawCamera();
+  background(13, 13, 17);
+  drawSubtleGrid();
+  drawCameraFrame();
   drawHandOverlay();
-
-  if      (gameState === 'READY')     drawReady();
-  else if (gameState === 'COUNTDOWN') drawCountdown();
-  else if (gameState === 'DETECT')    drawDetect();
-  else if (gameState === 'RESULT')    drawResult();
-  else if (gameState === 'MENU')      drawMenu();
+  drawHUDPanel();
+  drawScoreCard();
 }
 
-// ── 攝影機畫面（中央 60%）────────────────────────────────────
-function drawCamera() {
+// 背景微網格
+function drawSubtleGrid() {
+  stroke(255, 255, 255, 5);
+  strokeWeight(0.5);
+  let step = 40;
+  for (let x = 0; x < W; x += step) line(x, 0, x, H);
+  for (let y = 0; y < H; y += step) line(0, y, W, y);
+}
+
+// ── 攝影機畫面（圓角 + 柔光邊框）───────────────────────────
+function drawCameraFrame() {
+  // 外光暈（疊多層）
+  noFill();
+  for (let i = 10; i > 0; i--) {
+    stroke(255, 255, 255, i * 1.5);
+    strokeWeight(i * 1.8);
+    rect(camX, camY, camW, camH, 14);
+  }
+
   push();
-  // 鏡像翻轉（selfie 模式）
   translate(camX + camW, camY);
   scale(-1, 1);
-  if (video.loadedmetadata || video.elt.readyState >= 2) {
+  if (video.elt && video.elt.readyState >= 2) {
+    drawingContext.save();
+    drawingContext.beginPath();
+    drawingContext.roundRect(0, 0, camW, camH, 12);
+    drawingContext.clip();
     image(video, 0, 0, camW, camH);
+    drawingContext.restore();
   }
   pop();
 
-  // 邊框
+  // 亮邊框
   noFill();
-  stroke(0, 220, 180);
-  strokeWeight(2);
-  rect(camX, camY, camW, camH, 8);
+  stroke(255, 255, 255, 45);
+  strokeWeight(1.5);
+  rect(camX, camY, camW, camH, 14);
 }
 
-// ── 手部骨架疊加 ─────────────────────────────────────────────
+// ── 手部骨架 ─────────────────────────────────────────────────
 function drawHandOverlay() {
   if (!landmarks.length) return;
-
-  const connections = [
-    [0,1],[1,2],[2,3],[3,4],
-    [0,5],[5,6],[6,7],[7,8],
-    [5,9],[9,10],[10,11],[11,12],
-    [9,13],[13,14],[14,15],[15,16],
-    [13,17],[17,18],[18,19],[19,20],
-    [0,17]
+  const conn = [
+    [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+    [5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],
+    [13,17],[17,18],[18,19],[19,20],[0,17]
   ];
-
-  stroke(0, 255, 180, 160);
-  strokeWeight(1.5);
-  for (let [a, b] of connections) {
-    const ax = camX + camW - landmarks[a].x * camW;
-    const ay = camY + landmarks[a].y * camH;
-    const bx = camX + camW - landmarks[b].x * camW;
-    const by = camY + landmarks[b].y * camH;
-    line(ax, ay, bx, by);
+  stroke(255, 255, 255, 90);
+  strokeWeight(1.2);
+  for (let [a,b] of conn) {
+    line(
+      camX + camW - landmarks[a].x * camW, camY + landmarks[a].y * camH,
+      camX + camW - landmarks[b].x * camW, camY + landmarks[b].y * camH
+    );
   }
-
-  noStroke();
-  fill(0, 255, 180);
+  noStroke(); fill(255, 255, 255, 210);
   for (let lm of landmarks) {
-    const px = camX + camW - lm.x * camW;
-    const py = camY + lm.y * camH;
-    ellipse(px, py, 6, 6);
+    ellipse(camX + camW - lm.x * camW, camY + lm.y * camH, 5, 5);
   }
 }
 
-// ── READY 畫面 ───────────────────────────────────────────────
-function drawReady() {
-  drawScoreboard();
-  drawTitle('剪刀石頭布', '按 SPACE 開始');
+// ── HUD 彈出卡片（攝影機上方）───────────────────────────────
+function drawHUDPanel() {
+  panelScale = lerp(panelScale, 1.0, 0.10);
 
-  fill(255);
-  textSize(14);
-  textAlign(CENTER, CENTER);
-  text('[ 鍵盤 SPACE 或點擊畫面開始 ]', W/2, H * 0.88);
-}
-
-// ── 倒數 ─────────────────────────────────────────────────────
-function drawCountdown() {
-  let elapsed = millis() - countdownTimer;
-  let remaining = ceil((3000 - elapsed) / 1000);
-
-  if (remaining <= 0) {
-    gameState = 'DETECT';
-    detectStart = millis();
-    return;
-  }
-
-  drawScoreboard();
-
-  // 大倒數數字
   push();
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(120);
-  text(remaining, W/2, H * 0.12);
-  fill(255);
-  textSize(22);
-  text('準備出拳！', W/2, H * 0.22);
+  // 以卡片中心做入場縮放
+  let cx = panelX + panelW / 2;
+  let cy = panelY + panelH / 2;
+  translate(cx, cy);
+  scale(panelScale);
+  translate(-panelW / 2, -panelH / 2);
+
+  drawCard(0, 0, panelW, panelH);
+
+  if      (gameState === 'READY')     drawCardReady();
+  else if (gameState === 'COUNTDOWN') drawCardCountdown();
+  else if (gameState === 'DETECT')    drawCardDetect();
+  else if (gameState === 'RESULT')    drawCardResult();
+  else if (gameState === 'MENU')      drawCardMenu();
+
   pop();
 }
 
-let detectStart = 0;
-const DETECT_WINDOW = 1500; // ms 內鎖定手勢
+// ── 卡片底板（毛玻璃風格）────────────────────────────────────
+function drawCard(x, y, w, h, r = 16) {
+  // 多層陰影
+  for (let i = 18; i > 0; i--) {
+    fill(0, 0, 0, i * 3.5);
+    noStroke();
+    rect(x - i * 0.4, y + i * 0.9, w + i * 0.8, h + i * 0.6, r + 2);
+  }
+  // 本體：深色半透明
+  fill(18, 18, 24, 238);
+  noStroke();
+  rect(x, y, w, h, r);
+  // 頂部高光條（給卡片「厚度感」）
+  fill(255, 255, 255, 14);
+  noStroke();
+  rect(x + 1, y + 1, w - 2, h * 0.38, r, r, 0, 0);
+  // 邊框
+  noFill();
+  stroke(255, 255, 255, 22);
+  strokeWeight(1);
+  rect(x, y, w, h, r);
+}
 
-// ── 辨識中 ───────────────────────────────────────────────────
-function drawDetect() {
+// ── READY ────────────────────────────────────────────────────
+function drawCardReady() {
+  textAlign(CENTER, CENTER); noStroke();
+  fill(255, 255, 255, 90); textSize(11);
+  text('A I   手 勢 辨 識', panelW / 2, 26);
+
+  // 細分隔線
+  stroke(255, 255, 255, 20); strokeWeight(1);
+  line(panelW * 0.2, 42, panelW * 0.8, 42); noStroke();
+
+  fill(255); textSize(28);
+  text('剪刀  ✌    石頭  ✊    布  ✋', panelW / 2, 90);
+
+  fill(255, 255, 255, 100); textSize(11);
+  text('按  SPACE  或點擊畫面開始', panelW / 2, 142);
+}
+
+// ── COUNTDOWN ────────────────────────────────────────────────
+function drawCardCountdown() {
+  let elapsed   = millis() - countdownTimer;
+  let remaining = ceil((3000 - elapsed) / 1000);
+  if (remaining <= 0) {
+    gameState = 'DETECT'; detectStart = millis(); return;
+  }
+  textAlign(CENTER, CENTER); noStroke();
+  fill(255, 255, 255, 90); textSize(11);
+  text('準 備 出 拳', panelW / 2, 30);
+
+  fill(255); textSize(88);
+  text(remaining, panelW / 2, 108);
+}
+
+// ── DETECT ───────────────────────────────────────────────────
+function drawCardDetect() {
   let elapsed = millis() - detectStart;
   let g = classifyGesture(landmarks);
-
   if (elapsed > DETECT_WINDOW) {
-    // 時間到，鎖定
-    playerGesture = (g !== 'none') ? g : 'rock';
+    playerGesture = g !== 'none' ? g : 'rock';
     aiChoice      = randomChoice();
     roundResult   = judgeRound(playerGesture, aiChoice);
     score[roundResult]++;
-    resultTimer = millis();
-    gameState   = 'RESULT';
-    return;
+    resultTimer = millis(); gameState = 'RESULT'; return;
   }
+  textAlign(CENTER, CENTER); noStroke();
+  fill(255, 255, 255, 90); textSize(11);
+  text('出  拳！', panelW / 2, 28);
 
-  drawScoreboard();
+  fill(255); textSize(24);
+  text(gestureEmoji(g) + '  ' + gestureName(g), panelW / 2, 80);
 
-  fill(255);
-  textSize(24);
-  textAlign(CENTER, CENTER);
-  text('AI 思考中...', camX / 2, H / 2);
+  // 進度條底
+  fill(35, 35, 45); noStroke();
+  rect(40, 118, panelW - 80, 7, 4);
+  // 進度
+  fill(220); noStroke();
+  rect(40, 118, (panelW - 80) * (elapsed / DETECT_WINDOW), 7, 4);
 
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(28);
-  text('出拳！', W/2, H * 0.12);
-
-  fill(255);
-  textSize(20);
-  text('目前偵測：' + gestureName(g), W/2, H * 0.19);
-
-  // 進度條
-  let prog = elapsed / DETECT_WINDOW;
-  noFill();
-  stroke(100);
-  strokeWeight(4);
-  rect(camX, camY + camH + 16, camW, 10, 5);
-  fill(50, 220, 140);
-  noStroke();
-  rect(camX, camY + camH + 16, camW * prog, 10, 5);
+  fill(255, 255, 255, 60); textSize(11);
+  text('辨識中，請保持手勢…', panelW / 2, 148);
 }
 
-// ── 結果 ─────────────────────────────────────────────────────
-function drawResult() {
+// ── RESULT ───────────────────────────────────────────────────
+function drawCardResult() {
   if (millis() - resultTimer > RESULT_HOLD) {
-    menuGesture      = 'none';
-    menuGestureStart = 0;
-    menuProgress     = 0;
-    gameState = 'MENU';
-    return;
+    menuGesture = 'none'; menuProgress = 0;
+    gameState = 'MENU'; return;
   }
+  const txt   = { win:'你 贏 了', lose:'你 輸 了', draw:'平 手' };
+  const emoji = { win:'🎉', lose:'😢', draw:'🤝' };
 
-  drawScoreboard();
+  textAlign(CENTER, CENTER); noStroke();
+  fill(255); textSize(22);
+  text(emoji[roundResult] + '  ' + txt[roundResult], panelW / 2, 30);
 
-  const resultText = { win: '🎉 你贏了！', lose: '😢 你輸了！', draw: '🤝 平手！' };
-  const resultColor = { win: [50, 255, 120], lose: [255, 80, 80], draw: [255, 200, 50] };
+  stroke(255, 255, 255, 18); strokeWeight(1);
+  line(panelW * 0.15, 52, panelW * 0.85, 52); noStroke();
 
-  push();
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(52);
-  text(resultText[roundResult], W/2, H * 0.12);
+  // 兩欄
+  fill(255, 255, 255, 70); textSize(11);
+  text('AI', panelW * 0.27, 74);
+  text('你', panelW * 0.73, 74);
 
-  // 左側：顯示電腦出拳
-  textSize(28);
-  text('AI 出拳', camX / 2, H / 2 - 40);
-  textSize(48);
-  text(gestureName(aiChoice), camX / 2, H / 2 + 40);
+  fill(255); textSize(40);
+  text(gestureEmoji(aiChoice),      panelW * 0.27, 120);
+  text(gestureEmoji(playerGesture), panelW * 0.73, 120);
 
-  // 右側：顯示玩家出拳
-  textSize(28);
-  text('你出拳', W - camX / 2, H / 2 - 40);
-  textSize(48);
-  text(gestureName(playerGesture), W - camX / 2, H / 2 + 40);
-  pop();
+  fill(255, 255, 255, 55); textSize(11);
+  text(gestureName(aiChoice),      panelW * 0.27, 150);
+  text(gestureName(playerGesture), panelW * 0.73, 150);
+
+  fill(255, 255, 255, 30); textSize(14);
+  text('vs', panelW * 0.5, 120);
 }
 
-// ── 繼續/結束選單 ────────────────────────────────────────────
-function drawMenu() {
-  drawScoreboard();
+// ── MENU ─────────────────────────────────────────────────────
+function drawCardMenu() {
+  textAlign(CENTER, CENTER); noStroke();
+  fill(255, 255, 255, 90); textSize(11);
+  text('繼 續 下 一 局 ？', panelW / 2, 26);
 
-  push();
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(30);
-  text('遊戲暫停', W/2, H * 0.10);
+  stroke(255, 255, 255, 18); strokeWeight(1);
+  line(panelW * 0.15, 42, panelW * 0.85, 42); noStroke();
 
-  // 左側說明
-  fill(255);
-  textSize(18);
-  text('✋ 張開手掌  →  繼續', W/2 - 120, H * 0.18);
-  text('✊ 握拳        →  結束', W/2 + 120, H * 0.18);
+  drawOptionPill(panelW * 0.28, 96, '✋', '繼續', menuGesture === 'open');
+  drawOptionPill(panelW * 0.72, 96, '✊', '結束', menuGesture === 'fist');
 
-  pop();
-
-  // 偵測選單手勢
+  // 手勢偵測
   let mg = classifyMenuGesture(landmarks);
-
   if (mg !== 'none') {
     if (mg !== menuGesture) {
-      menuGesture      = mg;
-      menuGestureStart = millis();
-      menuProgress     = 0;
+      menuGesture = mg; menuGestureStart = millis(); menuProgress = 0;
     } else {
       menuProgress = min((millis() - menuGestureStart) / MENU_HOLD_MS, 1);
       if (menuProgress >= 1) {
-        if (menuGesture === 'open') {
-          gameState = 'COUNTDOWN';
-          countdownTimer = millis();
-        } else {
-          gameState = 'READY';
-          score = { win: 0, lose: 0, draw: 0 };
-        }
-        menuGesture  = 'none';
-        menuProgress = 0;
-        return;
+        if (menuGesture === 'open') { gameState = 'COUNTDOWN'; countdownTimer = millis(); }
+        else { gameState = 'READY'; score = { win:0, lose:0, draw:0 }; }
+        menuGesture = 'none'; menuProgress = 0; return;
       }
     }
-  } else {
-    menuGesture  = 'none';
-    menuProgress = 0;
-  }
+  } else { menuGesture = 'none'; menuProgress = 0; }
 
   // 進度條
   if (menuGesture !== 'none') {
-    let barColor = menuGesture === 'open' ? [50, 255, 180] : [255, 80, 80];
-    let label    = menuGesture === 'open' ? '繼續中…' : '結束中…';
-
-    noFill();
-    stroke(60);
-    strokeWeight(6);
-    rect(camX, camY + camH + 16, camW, 14, 7);
-
-    fill(...barColor);
-    noStroke();
-    rect(camX, camY + camH + 16, camW * menuProgress, 14, 7);
-
-    fill(255);
-    textAlign(CENTER, CENTER);
-    textSize(16);
-    noStroke();
-    text(label + ' ' + floor(menuProgress * 100) + '%', W/2, camY + camH + 42);
+    let isOpen = menuGesture === 'open';
+    fill(40, 40, 50); noStroke();
+    rect(40, 144, panelW - 80, 7, 4);
+    fill(isOpen ? color(180, 240, 210) : color(240, 110, 110)); noStroke();
+    rect(40, 144, (panelW - 80) * menuProgress, 7, 4);
+    fill(255, 255, 255, 90); textSize(11);
+    text((isOpen ? '繼續中' : '結束中') + ' ' + floor(menuProgress * 100) + '%', panelW / 2, 164);
   } else {
-    fill(255);
-    textAlign(CENTER, CENTER);
-    textSize(15);
-    noStroke();
-    text('請做出手勢後保持靜止 2 秒', W/2, camY + camH + 42);
+    fill(255, 255, 255, 45); textSize(11);
+    text('做手勢並保持靜止 2 秒', panelW / 2, 158);
   }
 }
 
-// ── UI 元件 ──────────────────────────────────────────────────
-function drawScoreboard() {
+// ── 選項膠囊 ─────────────────────────────────────────────────
+function drawOptionPill(cx, cy, emoji, label, active) {
+  let pw = 112, ph = 52;
   push();
-  fill(20, 30, 40, 200);
+  translate(cx - pw / 2, cy - ph / 2);
+  // 背景
+  fill(active ? color(255,255,255,22) : color(28,28,36,255));
   noStroke();
-  rect(W - 180, 10, 168, 80, 10);
-
-  textAlign(LEFT, TOP);
-  textSize(15);
-  fill(255);
-  text(`勝：${score.win}`, W - 160, 22);
-  text(`負：${score.lose}`, W - 160, 42);
-  text(`平：${score.draw}`, W - 160, 62);
-  pop();
-}
-
-function drawTitle(title, sub) {
-  push();
+  rect(0, 0, pw, ph, 12);
+  // 邊框
+  stroke(active ? color(255,255,255,70) : color(255,255,255,20));
+  strokeWeight(1); noFill();
+  rect(0, 0, pw, ph, 12);
+  // 文字
+  noStroke();
+  fill(255, 255, 255, active ? 255 : 140);
   textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(36);
-  text(title, W/2, H * 0.10);
-  fill(255);
-  textSize(18);
-  text(sub, W/2, H * 0.17);
+  textSize(20); text(emoji, pw/2, ph/2 - 7);
+  textSize(11); text(label, pw/2, ph/2 + 14);
   pop();
 }
 
-// ── 輔助函式 ─────────────────────────────────────────────────
-function randomChoice() {
-  return ['rock', 'paper', 'scissors'][floor(random(3))];
+// ── 右下計分卡 ───────────────────────────────────────────────
+function drawScoreCard() {
+  let sw = 124, sh = 82;
+  let sx = W - sw - 18, sy = H - sh - 18;
+  push();
+  drawCard(sx, sy, sw, sh, 12);
+  textAlign(LEFT, TOP); noStroke(); textSize(13);
+  fill(160, 235, 200); text(`勝  ${score.win}`,   sx + 16, sy + 12);
+  fill(235, 120, 120); text(`負  ${score.lose}`,  sx + 16, sy + 36);
+  fill(235, 205, 100); text(`平  ${score.draw}`,  sx + 16, sy + 58);
+  pop();
 }
 
+// ── 輔助 ─────────────────────────────────────────────────────
+function randomChoice() {
+  return ['rock','paper','scissors'][floor(random(3))];
+}
 function judgeRound(p, a) {
   if (p === a) return 'draw';
-  if ((p === 'rock'     && a === 'scissors') ||
-      (p === 'scissors' && a === 'paper')    ||
-      (p === 'paper'    && a === 'rock'))    return 'win';
+  if ((p==='rock'&&a==='scissors')||(p==='scissors'&&a==='paper')||(p==='paper'&&a==='rock')) return 'win';
   return 'lose';
 }
-
 function gestureName(g) {
-  return { rock: '✊ 石頭', paper: '✋ 布', scissors: '✌ 剪刀', none: '❓' }[g] || g;
+  return { rock:'石頭', paper:'布', scissors:'剪刀', none:'?' }[g] || g;
+}
+function gestureEmoji(g) {
+  return { rock:'✊', paper:'✋', scissors:'✌️', none:'？' }[g] || g;
 }
 
-// ── 鍵盤 / 滑鼠觸發 ─────────────────────────────────────────
 function keyPressed() {
-  if (key === ' ' && (gameState === 'READY')) {
-    gameState      = 'COUNTDOWN';
-    countdownTimer = millis();
+  if (key === ' ' && gameState === 'READY') {
+    gameState = 'COUNTDOWN'; countdownTimer = millis();
   }
 }
-
 function mousePressed() {
   if (gameState === 'READY') {
-    gameState      = 'COUNTDOWN';
-    countdownTimer = millis();
+    gameState = 'COUNTDOWN'; countdownTimer = millis();
   }
 }
-
 function windowResized() {
   W = windowWidth; H = windowHeight;
   resizeCanvas(W, H);
-  camW = W * 0.60; camH = H * 0.60;
-  camX = (W - camW) / 2; camY = (H - camH) / 2;
+  recalcLayout();
 }
