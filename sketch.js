@@ -165,17 +165,23 @@ function drawHandOverlay() {
     [5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],
     [13,17],[17,18],[18,19],[19,20],[0,17]
   ];
-  stroke(255, 255, 255, 90);
-  strokeWeight(1.2);
+  // 1. 繪製連線 (亮綠色)
+  stroke(0, 255, 100); 
+  strokeWeight(2.5);
   for (let [a,b] of conn) {
     line(
       camX + camW - landmarks[a].x * camW, camY + landmarks[a].y * camH,
       camX + camW - landmarks[b].x * camW, camY + landmarks[b].y * camH
     );
   }
-  noStroke(); fill(255, 255, 255, 210);
-  for (let lm of landmarks) {
-    ellipse(camX + camW - lm.x * camW, camY + lm.y * camH, 5, 5);
+  // 2. 繪製節點 (手腕點 0 為紅色，其餘為綠色)
+  noStroke();
+  for (let i = 0; i < landmarks.length; i++) {
+    let x = camX + camW - landmarks[i].x * camW;
+    let y = camY + landmarks[i].y * camH;
+    if (i === 0) fill(255, 50, 50); // 手腕：紅色
+    else fill(0, 255, 100);        // 其他：綠色
+    ellipse(x, y, 8, 8);
   }
 }
 
