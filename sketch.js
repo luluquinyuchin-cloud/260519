@@ -60,9 +60,9 @@ function setup() {
   });
   hands.setOptions({
     maxNumHands: 1,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.6
+    modelComplexity: 0, // 改為 0 (Lite 版) 以大幅提升效能
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
   });
   hands.onResults(onHandResults);
 }
@@ -233,6 +233,12 @@ function drawDetect() {
   }
 
   drawScoreboard();
+
+  fill(255);
+  textSize(24);
+  textAlign(CENTER, CENTER);
+  text('AI 思考中...', camX / 2, H / 2);
+
   fill(255);
   textAlign(CENTER, CENTER);
   textSize(28);
@@ -274,9 +280,17 @@ function drawResult() {
   textSize(52);
   text(resultText[roundResult], W/2, H * 0.12);
 
-  fill(255);
-  textSize(26);
-  text(`你：${gestureName(playerGesture)}   vs   AI：${gestureName(aiChoice)}`, W/2, H * 0.22);
+  // 左側：顯示電腦出拳
+  textSize(28);
+  text('AI 出拳', camX / 2, H / 2 - 40);
+  textSize(48);
+  text(gestureName(aiChoice), camX / 2, H / 2 + 40);
+
+  // 右側：顯示玩家出拳
+  textSize(28);
+  text('你出拳', W - camX / 2, H / 2 - 40);
+  textSize(48);
+  text(gestureName(playerGesture), W - camX / 2, H / 2 + 40);
   pop();
 }
 
